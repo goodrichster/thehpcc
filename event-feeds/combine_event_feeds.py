@@ -1,5 +1,6 @@
-import feedparser
+import feedparser  # May be flagged by Pylance if the module isn't in your current interpreter
 from ics import Calendar, Event
+from ics.grammar.parse import Container, ContentLine
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -12,6 +13,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 import time
 from selenium.webdriver.chrome.options import Options
+from dateutil import parser as date_parser  # Robust natural date parsing
+import re
 
 # Set timezones
 local_tz = pytz.timezone("America/New_York")
@@ -26,7 +29,19 @@ def get_chrome_driver():
     options.add_argument('--remote-debugging-port=9222')
     return webdriver.Chrome(options=options)
 
-# --- 1. AllEvents Feed ---
+# Clean and parse various fuzzy or irregular date formats
+def clean_and_parse_date(raw_date):
+    if not raw_date or raw_date.strip().lower() in ["sales end soon", "going fast", "just added", "almost full"]:
+        raise ValueError(f"Could not parse date: {raw_date}")
+    cleaned = re.sub(r"\s*•.*", "", raw_date)              # Remove trailing '• ...'
+    cleaned = re.sub(r"\s*\+.*", "", cleaned)              # Remove trailing '+ N more'
+    cleaned = cleaned.strip()
+    try:
+        return date_parser.parse(cleaned, fuzzy=True)
+    except Exception:
+        raise ValueError(f"Could not parse date: {raw_date}")
+
+# --- AllEvents Feed ---
 def get_allevents():
     driver = get_chrome_driver()
     driver.get("https://allevents.in/hyde%20park-ma?ref=cityselect")
@@ -49,7 +64,7 @@ def get_allevents():
         events.append({"title": title, "location": location, "date": date})
     return events
 
-# --- 2. Eventbrite Feed ---
+# --- Eventbrite Feed ---
 def get_eventbrite():
     urls = [
         "https://www.eventbrite.com/d/united-states--massachusetts/hyde-park/",
@@ -82,7 +97,7 @@ def get_eventbrite():
     driver.quit()
     return events
 
-# --- 3. BPL RSS Feed ---
+# --- BPL RSS Feed ---
 def get_bpl_events():
     feed_url = 'https://gateway.bibliocommons.com/v2/libraries/bpl/rss/events?locations=27&cancelled=false'
     feed = feedparser.parse(feed_url)
@@ -105,18 +120,18 @@ def get_bpl_events():
                 continue
             location = "Boston Public Library, Hyde Park"
             url = entry.link
-            events.append({"title": title, "date": dt.strftime("%Y-%m-%d %H:%M"), "location": location, "url": url})
+            description = getattr(entry, "summary", "")
+            events.append({"title": title, "date": dt.strftime("%Y-%m-%d %H:%M"), "location": location, "url": url, "description": description})
         except Exception:
             continue
     return events
 
-# --- 4. Historical Society ---
+# --- Historical Society Feed ---
 def get_historical_events():
     url = 'https://www.hydeparkhistoricalsociety.org/news/'
     response = requests.get(url)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
-    current_date = datetime.now(boston_tz)
     entries = soup.find_all('article')
 
     events = []
@@ -130,7 +145,7 @@ def get_historical_events():
         title = title_tag.get_text(strip=True) if title_tag else 'Untitled Event'
         desc_tag = entry.find('p') or entry.find('div')
         description = desc_tag.get_text(strip=True) if desc_tag else ''
-        return {"title": title, "date": event_date.strftime("%Y-%m-%d %H:%M"), "location": "Hyde Park Historical Society", "url": url}
+        return {"title": title, "date": event_date.strftime("%Y-%m-%d %H:%M"), "location": "Hyde Park Historical Society", "url": url, "description": description}
 
     for e in entries:
         ev = extract(e)
@@ -141,23 +156,30 @@ def get_historical_events():
 # --- Create ICS calendar ---
 def create_ics(events, output_file="hydepark_events_combined.ics"):
     calendar = Calendar()
-    calendar.extra.append("X-WR-TIMEZONE:America/New_York")
+    calendar.extra = Container(name="X-WR-TIMEZONE")
+    calendar.extra.append(ContentLine(name="X-WR-TIMEZONE", value="America/New_York"))
+
     for e in events:
         try:
+            parsed = clean_and_parse_date(e["date"])
             event = Event()
             event.name = e["title"]
-            event.begin = local_tz.localize(datetime.strptime(e["date"], "%Y-%m-%d %H:%M"))
+            event.begin = parsed.replace(tzinfo=local_tz)
             event.end = event.begin + timedelta(hours=1)
             event.location = e["location"]
-            event.description = f'URL: {e.get("url", "")}'
+            event.description = e.get("description", f'URL: {e.get("url", "")}')
             event.uid = f"{uuid4()}@hydeparkevents"
             calendar.events.add(event)
-        except Exception:
+        except Exception as ex:
+            print(f"❌ Failed to add event: {e['title']}, error: {ex}")
             continue
+
     with open(output_file, "w") as f:
-        f.write(str(calendar))
+        f.writelines(calendar.serialize_iter())
     print(f"✅ ICS file written to: {output_file}")
 
 if __name__ == "__main__":
+    print("🚀 Starting event feed combination...")
     all_events = get_allevents() + get_eventbrite() + get_bpl_events() + get_historical_events()
     create_ics(all_events)
+    print("✅ Event feed combination completed.")
