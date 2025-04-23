@@ -1,2 +1,2 @@
 # thehpcc
-HPCC custom code foro events, etc.
+HPCC custom code for events, etc.
