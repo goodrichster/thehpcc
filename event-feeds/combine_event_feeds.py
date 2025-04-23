@@ -11,14 +11,27 @@ import requests
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 import time
+import tempfile
+from selenium.webdriver.chrome.options import Options
 
 # Set timezones
 local_tz = pytz.timezone("America/New_York")
 boston_tz = ZoneInfo("America/New_York")
 
+# Chrome driver options (safe config)
+def get_chrome_driver():
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--remote-debugging-port=9222')
+    temp_profile = tempfile.mkdtemp()
+    options.add_argument(f'--user-data-dir={temp_profile}')
+    return webdriver.Chrome(options=options)
+
 # --- 1. AllEvents Feed ---
 def get_allevents():
-    driver = webdriver.Chrome()
+    driver = get_chrome_driver()
     driver.get("https://allevents.in/hyde%20park-ma?ref=cityselect")
     WebDriverWait(driver, 20).until(
         EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li.event-card"))
@@ -45,7 +58,7 @@ def get_eventbrite():
         "https://www.eventbrite.com/d/united-states--massachusetts/hyde-park/",
         "https://www.eventbrite.com/d/united-states--massachusetts/hyde-park/?page=2"
     ]
-    driver = webdriver.Chrome()
+    driver = get_chrome_driver()
     events = []
 
     for url in urls:
