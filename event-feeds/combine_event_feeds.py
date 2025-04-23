@@ -155,7 +155,7 @@ def create_ics(events, output_file="hydepark_events_combined.ics"):
         except Exception:
             continue
     with open(output_file, "w") as f:
-        f.writelines(calendar.serialize_iter())
+        f.write(str(calendar))
     print(f"✅ ICS file written to: {output_file}")
 
 if __name__ == "__main__":
